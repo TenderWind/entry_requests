@@ -2,51 +2,29 @@
 
 import json
 import motor.motor_tornado
-import random
-import string
+import pymongo
+
 import tornado.web
 
 from bson.objectid import ObjectId
-from hashlib import sha1
+from datetime import datetime
 from tornado import gen
 from tornado.ioloop import IOLoop
 
-
-def hash_password(password):
-    return sha1(password).hexdigest()
+from func import hash_password, generate_token, RequestStatusIds, generate_missing_param_message
 
 
-def generate_token():
-    r = random.SystemRandom()
-    alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
-
-    return ''.join(alphabet[r.randint(0, len(alphabet) - 1)] for _ in range(18))
-
-
-class RequestStatusIds:
-    NEW = 0
-    ACCEPTED = 1
-    REJECTED = 2
-
-    names = {
-        NEW: 'new',
-        ACCEPTED: 'accepted',
-        REJECTED: 'rejected',
-    }
-
-
-class RegistrationHandler(tornado.web.RequestHandler):
+class SignUpHandler(tornado.web.RequestHandler):
     @gen.coroutine
     def post(self, *args, **kwargs):
         request_body = json.loads(self.request.body)
-
         username = request_body.get('username', None)
         if not username:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='username'))
+            self.send_error(400, reason=generate_missing_param_message('username'))
             return
         password = request_body.get('password', None)
         if not password:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='password'))
+            self.send_error(400, reason=generate_missing_param_message('password'))
             return
         password = hash_password(password)
 
@@ -61,8 +39,10 @@ class RegistrationHandler(tornado.web.RequestHandler):
         result = yield users.insert_one({
             'username': username,
             'password': password,
-            'is_manager': None,
-            'can_entry': None,
+            'is_manager': False,
+            'can_entry': False,
+            'sign_up_date': datetime.utcnow(),
+            'modification_date': None,
         })
         if result:
             self.write({'message': 'User successfully registered'})
@@ -71,18 +51,17 @@ class RegistrationHandler(tornado.web.RequestHandler):
         return
 
 
-class LoginHandler(tornado.web.RequestHandler):
+class SignInHandler(tornado.web.RequestHandler):
     @gen.coroutine
     def post(self, *args, **kwargs):
         request_body = json.loads(self.request.body)
-
         username = request_body.get('username', None)
         if not username:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='username'))
+            self.send_error(400, reason=generate_missing_param_message('username'))
             return
         password = request_body.get('password', None)
         if not password:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='password'))
+            self.send_error(400, reason=generate_missing_param_message('password'))
             return
         password = hash_password(password)
 
@@ -95,15 +74,18 @@ class LoginHandler(tornado.web.RequestHandler):
             self.write({'message': 'Invalid password'})
             return
 
-        user_id = user['_id']
         tokens = self.settings['db'].tokens
+        user_id = user['_id']
         token = yield tokens.find_one({'user_id': user_id})
         if token:
             self.write({'token': token['token']})
             return
 
         token = generate_token()
-        result = yield tokens.insert_one({'user_id': user_id, 'token': token})
+        result = yield tokens.insert_one({
+            'user_id': user_id,
+            'token': token,
+        })
         if result:
             self.write({'token': token})
             return
@@ -111,14 +93,13 @@ class LoginHandler(tornado.web.RequestHandler):
         return
 
 
-class LogoutHandler(tornado.web.RequestHandler):
+class SignOutHandler(tornado.web.RequestHandler):
     @gen.coroutine
     def post(self, *args, **kwargs):
         request_body = json.loads(self.request.body)
-
         token = request_body.get('token', None)
         if not token:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='token'))
+            self.send_error(400, reason=generate_missing_param_message('token'))
             return
 
         tokens = self.settings['db'].tokens
@@ -127,21 +108,17 @@ class LogoutHandler(tornado.web.RequestHandler):
             self.send_error(401, reason='Invalid token')
             return
 
-        self.write({'message': ''})
+        self.write({'message': 'User successfully signed out'})
         return
 
 
-class ManagerHandler(tornado.web.RequestHandler):
+class UsersHandler(tornado.web.RequestHandler):
     @gen.coroutine
-    def get(self, *args, **kwargs):
-        SET = 'set_manager'
-        REMOVE = 'remove_manager'
-        command = (self.request.uri.split('/')[-1]
-                   and self.request.uri.split('/')[-1] or self.request.uri.split('/')[-2])
-
-        token = kwargs.get('token', None)
+    def post(self, *args, **kwargs):
+        request_body = json.loads(self.request.body)
+        token = request_body.get('token', None)
         if not token:
-            self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='token'))
+            self.send_error(400, reason=generate_missing_param_message('token'))
             return
 
         users = self.settings['db'].users
@@ -150,28 +127,85 @@ class ManagerHandler(tornado.web.RequestHandler):
         if not token:
             self.send_error(401, reason='Invalid token')
             return
+        user = yield users.find_one({'_id': token['user_id']})
+        if not user['is_manager']:
+            self.write({'message': 'User {username} does not have permission for this action'.format(
+                username=user['username']
+            )})
+            return
 
-        user_id = token['user_id']
-        user = yield users.find_one({'_id': user_id})
-        if command == SET:
+        users_cursor = users.find().sort('username', pymongo.ASCENDING)
+        count = yield users_cursor.count()
+        if count == 0:
+            self.write({'message': 'No users'})
+            return
+        while (yield users_cursor.fetch_next):
+            user = users_cursor.next_object()
+            self.write({
+                'id': str(user['_id']),
+                'username': user['username'],
+                'is_manager': user['is_manager'],
+                'can_entry': user['can_entry'],
+                'sign_up_date': user['sign_up_date'].strftime('%d.%m.%Y %H:%M:%S'),
+                'modification_date': user['modification_date']
+                and user['modification_date'].strftime('%d.%m.%Y %H:%M:%S') or user['modification_date'],
+            })
+
+        return
+
+
+class ManagerHandler(tornado.web.RequestHandler):
+    @gen.coroutine
+    def post(self, *args, **kwargs):
+        request_body = json.loads(self.request.body)
+        token = request_body.get('token', None)
+        if not token:
+            self.send_error(400, reason=generate_missing_param_message('token'))
+            return
+        username = request_body.get('username', None)
+        if not username:
+            self.send_error(400, reason=generate_missing_param_message('username'))
+            return
+        is_manager = request_body.get('is_manager', None)
+        if not is_manager:
+            self.send_error(400, reason=generate_missing_param_message('is_manager'))
+            return
+
+        users = self.settings['db'].users
+        tokens = self.settings['db'].tokens
+        token = yield tokens.find_one({'token': token})
+        if not token:
+            self.send_error(401, reason='Invalid token')
+            return
+        # user = yield users.find_one({'_id': token['user_id']})
+        # if not user['is_manager']:
+        #     self.write({'message': 'User {username} does not have permission for this action'.format(
+        #         username=user['username']
+        #     )})
+        #     return
+
+        user = yield users.find_one({'username': username})
+        if is_manager:
             if user['is_manager']:
-                self.write({'message': 'User {username} is manager'.format(username=user['username'])})
+                self.write({'message': 'User {username} already a manager'.format(username=user['username'])})
                 return
 
-            result = users.update_one({'_id': user_id}, {'$set': {
+            result = users.update_one({'username': username}, {'$set': {
                 'is_manager': True,
                 'can_entry': True,
+                'modification_date': datetime.utcnow(),
             }})
             if result:
                 self.write({'message': 'User {username} is manager'.format(username=user['username'])})
                 return
-        elif command == REMOVE:
+        else:
             if not user['is_manager']:
-                self.write({'message': 'User {username} is not manager'.format(username=user['username'])})
+                self.write({'message': 'User {username} already not a manager'.format(username=user['username'])})
                 return
 
-            result = users.update_one({'_id': user_id}, {'$set': {
+            result = users.update_one({'username': username}, {'$set': {
                 'is_manager': False,
+                'modification_date': datetime.utcnow(),
             }})
             if result:
                 self.write({'message': 'User {username} is not manager'.format(username=user['username'])})
@@ -215,8 +249,9 @@ class SendRequestHandler(tornado.web.RequestHandler):
 
         result = yield requests.insert_one({
             'user_id': user_id,
-            'username': user['username'],
             'status': RequestStatusIds.NEW,
+            'creation_date': datetime.utcnow(),
+            'modification_date': None,
         })
         if result:
             self.write({'message': 'Request has been sent'})
@@ -256,16 +291,17 @@ class RequestsHandler(tornado.web.RequestHandler):
 
             while (yield requests_cursor.fetch_next):
                 request = requests_cursor.next_object()
+                user = yield requests.find_one({'user_id': request['user_id']})
 
                 self.write({
                     'id': str(request['_id']),
-                    'username': request['username'],
+                    'username': user['username'],
                     'status': RequestStatusIds.names[request['status']],
                 })
 
             return
         else:
-            request = yield requests.find_one({'user_id': user_id})
+            request = yield requests.find_one({'user_id': user_id}).sort('creation_date', pymongo.DESCENDING)
             if request:
                 self.write({
                     'id': str(request['_id']),
@@ -284,21 +320,19 @@ class RequestsHandler(tornado.web.RequestHandler):
 class AcceptHandler(tornado.web.RequestHandler):
     @gen.coroutine
     def post(self, *args, **kwargs):
-        ACCEPT = 'accept'
-        REJECT = 'reject'
-        command = (self.request.uri.split('/')[-1]
-                   and self.request.uri.split('/')[-1] or self.request.uri.split('/')[-2])
-
         request_body = json.loads(self.request.body)
 
         token = request_body.get('token', None)
         if not token:
             self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='token'))
             return
-
-        request_id = kwargs.get('request_id', None)
+        request_id = request_body.get('request_id', None)
         if not request_id:
             self.send_error(400, reason='Parameter {param_name} is missing'.format(param_name='request_id'))
+            return
+        can_entry = request_body.get('can_entry', None)
+        if not can_entry:
+            self.send_error(400, reason=generate_missing_param_message('can_entry'))
             return
 
         users = self.settings['db'].users
@@ -322,15 +356,18 @@ class AcceptHandler(tornado.web.RequestHandler):
         request = yield requests.find_one({'_id': ObjectId(request_id)})
         if not request:
             self.send_error(401, reason='Invalid request_id')
+
         result = requests.update_one({'_id': ObjectId(request_id)}, {'$set': {
-            'status': command == ACCEPT and RequestStatusIds.ACCEPTED or RequestStatusIds.REJECTED,
+            'status': can_entry and RequestStatusIds.ACCEPTED or RequestStatusIds.REJECTED,
+            'modification_date': datetime.utcnow(),
         }})
         if result:
             result = users.update_one({'_id': request['user_id']}, {'$set': {
-                'can_entry': command == ACCEPT,
+                'can_entry': can_entry,
+                'modification_date': datetime.utcnow(),
             }})
             if result:
-                if command == ACCEPT:
+                if can_entry:
                     self.write({'message': 'User {username} has received a entry permit'.format(
                         username=request['username']
                     )})
@@ -349,15 +386,14 @@ class Application(tornado.web.Application):
         db = motor.motor_tornado.MotorClient('mongodb://localhost:27017').entry_requests
 
         handlers = [
-            (r'/api/v1/registration/?', RegistrationHandler),
-            (r'/api/v1/login/?', LoginHandler),
-            (r'/api/v1/logout/?', LogoutHandler),
-            (r"/api/v1/(?P<token>[a-zA-Z0-9]+)/set_manager/?", ManagerHandler),
-            (r"/api/v1/(?P<token>[a-zA-Z0-9]+)/remove_manager/?", ManagerHandler),
-            (r'/api/v1/send_request/?', SendRequestHandler),
+            (r'/api/v1/auth/sign_up/?', SignUpHandler),
+            (r'/api/v1/auth/sign_in/?', SignInHandler),
+            (r'/api/v1/auth/sign_out/?', SignOutHandler),
+            (r"/api/v1/users/?", UsersHandler),
+            (r"/api/v1/users/set_manager/?", ManagerHandler),
+            (r'/api/v1/users/send_request/?', SendRequestHandler),
             (r'/api/v1/requests/?', RequestsHandler),
-            (r'/api/v1/requests/(?P<request_id>[a-zA-Z0-9]+)/accept/?', AcceptHandler),
-            (r'/api/v1/requests/(?P<request_id>[a-zA-Z0-9]+)/reject/?', AcceptHandler),
+            (r'/api/v1/requests/accept/?', AcceptHandler),
         ]
         tornado.web.Application.__init__(self, handlers, db=db)
 
@@ -369,8 +405,17 @@ def main():
 
 
 if __name__ == '__main__':
-    # db = motor.motor_tornado.MotorClient('mongodb://localhost:27017').entry_requests
-    # db.drop_collection('users')
-    # db.drop_collection('tokens')
-    # db.drop_collection('requests')
+    db = motor.motor_tornado.MotorClient('mongodb://localhost:27017').entry_requests
+    db.drop_collection('users')
+    db.drop_collection('tokens')
+    db.drop_collection('requests')
     main()
+
+# переименовать registration, login и logout в sign up, sign in, sign out -
+# возврат ошибок функцией self.write({'error_code': 'error_code', 'message': 'message'}), подумать про OrderedDict
+# добавить даты (user, request) -
+# переделать функции set_manager и remove_manager на использование username или id вместо токена -
+# поделить запросы на подразделы:
+#   auth (registration, login, logout), -
+#   users (users, set_manager, remove_manager, send_request), -
+#   requst (requests, accept, reject) -
