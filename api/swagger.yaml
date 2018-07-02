@@ -3,7 +3,7 @@ info:
   description: ''
   version: '1.0'
   title: 'API definition for entry requests project'
-host: localhost:8080
+host: localhost:8080/api
 basePath: /v1.1
 
 tags:
