@@ -1,0 +1,495 @@
+swagger: '2.0'
+info:
+  description: ''
+  version: '1.0'
+  title: 'API definition for entry requests project'
+host: localhost:8080
+basePath: /v1.1
+
+tags:
+  - name: auth
+    description: 'Users authentication (sign up, sign in, sign out)'
+  - name: users
+    description: 'User operations (get list of all users, set or remove manager permission, send entry request)'
+  - name: requests
+    description: 'Request operations (get request, accept or reject entry request)'
+
+paths:
+  /auth/sign_up:
+    post:
+      tags:
+        - auth
+      summary: ''
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Auth'
+      responses:
+        '200':
+          description: >-
+            If this username already registered return error:
+              ~~~~
+              {
+                "error": {
+                  "code": 4000,
+                  "message": "Username {username} already registered in the system"
+                }
+              }
+              ~~~~
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'User successfully registered'
+        '400':
+          description: 'Parameters username and password must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+  /auth/sign_in:
+    post:
+      tags:
+        - auth
+      summary: ''
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Auth'
+      responses:
+        '200':
+          description: >-
+            * If this username not registered return error:
+              ~~~~
+              {
+                "error": {
+                  "code": 4001,
+                  "message": "Username not registered in the system"
+                }
+              }
+              ~~~~
+            
+            * If password is wrong return error:
+              ~~~~
+              {
+                "error": {
+                  "code": 4002,
+                  "message": "Invalid password"
+                }
+              }
+              ~~~~
+          schema:
+            $ref: '#/definitions/Token'
+        '400':
+          description: 'Parameters username and password must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+  /auth/sign_out:
+    post:
+      tags:
+        - auth
+      summary: ''
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Token'
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'User successfully signed out'
+        '400':
+          description: 'Parameter token must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: ''
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+  /users:
+    post:
+      tags:
+        - users
+      summary: 'Get list of all users'
+      description: 'This operation allowed only for user with manager permission'
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Token'
+      responses:
+        '200':
+          description: >-
+            If no users in the system response return message: "No users"
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/User'
+        '400':
+          description: 'Parameter token must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: ''
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+        '403':
+          description: ''
+          schema:
+            $ref: '#/definitions/PermissionError'
+  /users/set_manager:
+    post:
+      tags:
+        - users
+      summary: 'Set manager permission for user'
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: 'Parameter is_manager "true" set permission for user, "false" remove permission for user'
+          schema:
+            type: object
+            required:
+              - token
+              - username
+              - is_manager
+            properties:
+              token:
+                type: string
+                example: 'token'
+              username:
+                type: string
+                example: 'username'
+              is_manager:
+                type: boolean
+                example: true
+      responses:
+        '200':
+          description: >-
+            The response message depends of user user permissions:
+          
+            * "User {username} already a manager" if is_manager set "true" and user already a manager;
+            
+            * "User {username} is a manager" if is_manager set "true" and user already not a manager;
+            
+            * "User {username} already not a manager" if is_manager set "false" and user already not a manager;
+            
+            * "User {username} is not a manager" if is_manager set "false" and user already a manager
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'User {username} is a manager'
+        '400':
+          description: 'Parameters token, username and is_manager must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: ''
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+        # '403':
+        #   description: ''
+        #   schema:
+        #     $ref: '#/definitions/PermissionError'
+  /users/send_request:
+    post:
+      tags:
+        - users
+      summary: 'Send entry request'
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Token'
+      responses:
+        '200':
+          description: >-
+            The response message depends on user permissions for entry and sended requests 
+            (only one allowed request in status new):
+          
+            * "User {username} already has permission for entry" if user already has permission for entry;
+            
+            * "User {username} already has submitted request" if user already has request in status new
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'Request has been sent'
+        '400':
+          description: 'Parameter token must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: ''
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+  /requests:
+    post:
+      tags:
+        - requests
+      summary: 'Get latest active request for user or list of all active requests for manager'
+      description: ''
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: ''
+          schema:
+            $ref: '#/definitions/Token'
+      responses:
+        '200':
+          description: >-
+            The response message depends on user permissions for entry and sended requests:
+            
+            * Latest active or accepted request for user:
+
+              ~~~~
+              {
+                "id": "request_id",
+                "status": "status",
+                "creation_date": "01.07.2018 22:13:54",
+                'modification_date': ""
+              }
+              ~~~~
+            
+            * List of all active requests for manager:
+            
+              ~~~~
+              [
+                {
+                  "id": "request_id",
+                  "username": "username",
+                  "status": "status",
+                  'creation_date': "01.07.2018 22:13:54",
+                  'modification_date': ""
+                }
+              ]
+              ~~~~
+            
+            * No requests message if no requests in the system:
+            
+              * `{'message': 'User {username} does not have any requests'}` user
+            
+              * `{'message': 'No requests'}` for manager
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Request'
+
+        '400':
+          description: 'Parameter token must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: ''
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+  /requests/accept:
+    post:
+      tags:
+        - requests
+      summary: 'Accept or reject entry request'
+      description: 'This operation allowed only for manager'
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          description: 'Parameter can_entry "true" accept user request, "false" reject user request'
+          schema:
+            type: object
+            required:
+              - token
+              - request_id
+              - can_entry
+            properties:
+              token:
+                type: string
+                example: 'token'
+              request_id:
+                type: string
+                example: 'request_id'
+              can_entry:
+                type: boolean
+                example: true
+      responses:
+        '200':
+          description: >-
+            * "User has received a entry permit" if manager accept user request
+            
+            * "User application was rejected" if manager reject user request
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'User has received a entry permit'
+        '400':
+          description: 'Parameters token, request_id and can_entry must be set'
+          schema:
+            $ref: '#/definitions/MissingParamError'
+        '401':
+          description: >-
+            Can return:
+              * Invalid token;
+              * Invalid request_id;
+          schema:
+            $ref: '#/definitions/InvalidTokenError'
+        '403':
+          description: ''
+          schema:
+            $ref: '#/definitions/PermissionError'
+
+definitions:
+  Auth:
+    type: object
+    required:
+      - username
+      - password
+    properties:
+      username:
+        type: string
+        example: 'username'
+      password:
+        type: string
+        example: 'password'
+  Token:
+    type: object
+    required:
+      - token
+    properties:
+      token:
+        type: string
+        example: 'token'
+  User:
+    type: object
+    required:
+      - username
+      - is_manager
+      - can_entry
+      - sign_up_date
+    properties:
+      id:
+        type: string
+        example: 'user_id'
+      username:
+        type: string
+        example: 'username'
+      is_manager:
+        type: boolean
+        default: false
+        example: false
+      can_entry:
+        type: boolean
+        default: false
+        example: false
+      sign_up_date:
+        type: string
+        format: date-time
+        example: '01.07.2018 22:13:54'
+      modification_date:
+        type: string
+        format: date-time
+        example: '' 
+  Request:
+    type: object
+    required:
+      - username
+      - status
+      - creation_date
+    properties:
+      id:
+        type: string
+        example: 'request_id'
+      username:
+        type: string
+        example: 'username'
+      status:
+        type: string
+        enum:
+          - 'new'
+          - 'accepted'
+          - 'rejected'
+      creation_date:
+        type: string
+        format: date-time
+        example: '01.07.2018 22:13:54'
+      modification_date:
+        type: string
+        format: date-time
+        example: ''
+        
+  MissingParamError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: 'Parameter {param_name} is missing'
+  InvalidTokenError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: 'Invalid token'
+  PermissionError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: 'User {username} does not have permission for this action'
+        
